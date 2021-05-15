@@ -1,4 +1,4 @@
-const s = require('slonik');
+const postgres = require('postgres');
 const glob = require('glob');
 const fs = require('fs');
 
@@ -24,24 +24,25 @@ async function findMigrationsIn(dir_prefix) {
   );
 }
 
-async function hasBeenRun(con, migration) {
-  return await con.oneFirst(s.sql`select count (*) from migrations where name=${migration.name}`) != 0;
+async function hasBeenRun(sql, migration) {
+  const [{count}] = await sql`select count (*) from migrations where name=${migration.name}`;
+  return count != 0;
 }
 
-async function _applyMigration(pool, migration) {
-  await pool.transaction(async con => {
+async function _applyMigration(sql, migration) {
+  await sql.begin(async sql => {
     console.log(`Running migration ${migration.name}`);
     
     const migration_code = require(migration.location);
-    await migration_code.up(con);
-    await con.query(s.sql`
+    await migration_code.up(sql);
+    await sql`
       insert into migrations (name) values (${migration.name})
-    `);
+    `;
   });
   return true;
 }
 
-exports.applyMigration = async function(connection_string, migration_loc) {
+exports.applyMigration = async function(sql, migration_loc) {
   if (!fs.existsSync(migration_loc)) {
     console.log(`Run aborted. ${migration_loc} not found`);
     return;
@@ -49,16 +50,14 @@ exports.applyMigration = async function(connection_string, migration_loc) {
 
   const m = migrationLocationToMigration(migration_loc);
 
-  const pool = getDb(connection_string);
-  if (!await hasBeenRun(pool, m)) {
-    await _applyMigration(pool, m);
+  if (!await hasBeenRun(sql, m)) {
+    await _applyMigration(sql, m);
   } else {
     console.log(`Run aborted. ${migration_loc} has already been applied`);
   }
-  await pool.end();
 }
 
-exports.revertMigration = async function(connection_string, migration_loc) {
+exports.revertMigration = async function(sql, migration_loc) {
   if (!fs.existsSync(migration_loc)) {
     console.log(`Revert aborted. ${migration_loc} not found`);
     return;
@@ -66,27 +65,20 @@ exports.revertMigration = async function(connection_string, migration_loc) {
 
   const m = migrationLocationToMigration(migration_loc);
 
-  const pool = getDb(connection_string);
-  if (!await hasBeenRun(pool, m)) {
+  if (!await hasBeenRun(sql, m)) {
     console.log(`Revert aborted because no migration with name=${m.name} found in migrations table`);
-    await pool.end();
     return;
   }
 
-  await pool.transaction(async con => {
+  await sql.begin(async sql => {
     console.log(`Reverting migration ${m.location}`);
     
     const migration_code = require(m.location);
-    await migration_code.down(con);
-    await con.query(s.sql`
+    await migration_code.down(sql);
+    await sql`
       delete from migrations where name=${m.name}
-    `);
+    `;
   });
-  await pool.end();
-}
-
-function getDb(connection_string) {
-  return s.createPool(connection_string);
 }
 
 async function findAllMigrations(paths) {
@@ -100,24 +92,29 @@ async function findAllMigrations(paths) {
   return migrations;
 }
 
-async function createMigrationTable(pool) {
-  return pool.query(s.sql`
-    create table if not exists migrations (
-      name text not null unique,
-      timestamp timestamptz not null default now()
-    )
-  `);
+async function createMigrationTable(sql) {
+  const [{exists}] = await sql`select exists (
+    select from pg_catalog.pg_tables 
+    where schemaname = 'public'
+    and tablename  = 'migrations') as exists`;
+
+  if (!exists) {
+    await sql`
+      create table migrations (
+        name text not null unique,
+        timestamp timestamptz not null default now()
+      )`;
+  }
 }
 
-exports.applyAllMigrations = async function(connection_string, paths) {
-  const pool = getDb(connection_string);
-  await createMigrationTable(pool);
+exports.applyAllMigrations = async function(sql, paths) {
+  await createMigrationTable(sql);
   const migrations = await findAllMigrations(paths);
 
   let num_run = 0;
   for (const m of migrations) {
-    if (!await hasBeenRun(pool, m)) {
-      if (await _applyMigration(pool, m)) num_run++;
+    if (!await hasBeenRun(sql, m)) {
+      if (await _applyMigration(sql, m)) num_run++;
     }
   }
 
@@ -126,52 +123,45 @@ exports.applyAllMigrations = async function(connection_string, paths) {
   } else {
     console.log(`No new migrations to apply`);
   }
-  await pool.end();
 }
 
 exports.createMigration = function(name, directory) {
   const timestamp = Date.now();
   const filename = `${directory}/${timestamp}-${name}.js`;
   fs.writeFileSync(filename,
-`const sql = require('slonik').sql;
-
-exports.up = async function(con) {
-  await con.query(sql\`
-  \`);
+`exports.up = async function(sql) {
+  await sql\`
+  \`;
 };
 
-exports.down = async function(con) {
-  await con.query(sql\`
-  \`);
+exports.down = async function(sql) {
+  await sql\`
+  \`;
 };`);
   console.log(`Migration written to ${filename}`);
 }
 
-async function listMigrations(connection_string, migration_paths) {
-  const pool = await getDb(connection_string);
-  await createMigrationTable(pool);
+async function listMigrations(sql, migration_paths) {
+  await createMigrationTable(sql);
   const migrations = await findAllMigrations(migration_paths);
   console.log("Applied Y/N     Path to migration");
   for (m of migrations) {
-    const run = await hasBeenRun(pool, m);
+    const run = await hasBeenRun(sql, m);
     console.log(`${run ? 'Y' : 'N'}               ${m.location}`);
   }
   console.log('');
-  await pool.end();
 }
 
-exports.cmd = async function(cmd_name, connection_string, migration_paths) {
-  const [,, ...args] = process.argv;
-
+exports.cmd = async function(cmd_name, sql, migration_paths, args) {
   if (args[0] == 'all') {
-    exports.applyAllMigrations(connection_string, migration_paths);
+    await exports.applyAllMigrations(sql, migration_paths);
 
   } else if (args[0] == 'list') {
-    await listMigrations(connection_string, migration_paths);
+    await listMigrations(sql, migration_paths);
   } else if (args[0] == 'revert') {
     const migration_loc = args[1];
     if (migration_loc) {
-      exports.revertMigration(connection_string, migration_loc);
+      await exports.revertMigration(sql, migration_loc);
     } else {
       console.log("Path to migration file expected as argument to revert");
     }
@@ -179,7 +169,7 @@ exports.cmd = async function(cmd_name, connection_string, migration_paths) {
   } else if (args[0] == 'apply') {
     const migration_loc = args[1];
     if (migration_loc) {
-      exports.applyMigration(connection_string, migration_loc);
+      await exports.applyMigration(sql, migration_loc);
     } else {
       console.log("Path to migration file expected as argument to apply");
     }
@@ -210,9 +200,14 @@ if (require.main === module) {
     throw new Error("MIGRATION_PATHS not set. aborting");
   }
 
+  const [,, ...args] = process.argv;
+
+  const sql = postgres(process.env['DATABASE_URL']);
+
   exports.cmd(
     'node ./migrate.js',
-    process.env['DATABASE_URL'],
-    process.env['MIGRATION_PATHS'].split(',')
-  );
+    sql,
+    [ __dirname + "/../migrations" ],
+    args
+  ).then(() => sql.end());
 }

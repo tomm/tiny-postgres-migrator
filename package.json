@@ -1,7 +1,7 @@
 {
-  "name": "tiny-slonik-migrator",
-  "version": "1.0.0",
-  "description": "Simple database schema migrator for Slonik",
+  "name": "tiny-postgres-migrator",
+  "version": "1.0.1",
+  "description": "Simple database schema migrator for the postgres node driver",
   "main": "src/index.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"
@@ -10,6 +10,6 @@
   "license": "MIT",
   "dependencies": {
     "glob": "^7.1.6",
-    "slonik": "^22.4.4"
+    "postgres": "^1.0.2"
   }
 }
