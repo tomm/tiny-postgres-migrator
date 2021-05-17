@@ -1,6 +1,6 @@
 {
   "name": "tiny-postgres-migrator",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "description": "Simple database schema migrator for the postgres node driver",
   "main": "src/index.js",
   "scripts": {
@@ -12,6 +12,13 @@
     "type": "git",
     "url": "https://github.com/tomm/tiny-postgres-migrator.git"
   },
+  "files": [
+    "migrations/*.js",
+    "src/**/*.js",
+    "src/**/*.d.ts",
+    "package.json",
+    "README.md"
+  ],
   "dependencies": {
     "glob": "^7.1.6",
     "postgres": "^1.0.2"
