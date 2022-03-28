@@ -190,7 +190,9 @@ ${cmd_name} revert ./path/to/the/migration.js # Revert one migration
 ${cmd_name} create <NAME> <DIRECTORY>         # Create a migration in the given directory
 `);
   }
-  sql.end();
+  if (sql) {
+    sql.end();
+  }
 }
 
 if (require.main === module) {
